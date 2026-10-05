@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { trackPageView, trackFeatureDiscovery } from '../../lib/analytics'
 import { createLogger } from '../../lib/logger'
 import { getCachedUpdateInfo, dismissUpdate, type UpdateCheckResult } from '../../lib/version-check'
+import { requestFeishuClipboardPermissions } from '../../lib/feishu/permissions'
 
 const logger = createLogger('HomeNew')
 
@@ -110,7 +111,7 @@ export function HomeNew() {
   const handleStartSync = async () => {
     if (selectedPlatforms.includes('feishu')) {
       try {
-        const granted = await chrome.permissions.request({ permissions: ['debugger', 'clipboardRead', 'clipboardWrite'] })
+        const granted = await requestFeishuClipboardPermissions()
         if (!granted) {
           setRateLimitWarning('未授予飞书粘贴权限，尚未创建飞书文档。')
           return

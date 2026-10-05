@@ -4,6 +4,7 @@ import { SyncDialog } from '@/components/sync-dialog'
 import type { DialogStatus, Platform, PlatformProgress, SyncResult } from '@/components/sync-dialog/types'
 import { localPath, prepareLocalDocument, previewDocument, LOCAL_LIMITS, type PreparedLocalDocument } from '../lib/local-document'
 import { prepareOneNoteImport, oneNoteRedirectUri } from '../lib/onenote'
+import { requestFeishuClipboardPermissions } from '../lib/feishu/permissions'
 
 export function LocalImportPage() {
   const [files, setFiles] = useState<File[]>([])
@@ -125,7 +126,7 @@ export function LocalImportPage() {
     // Permission must be requested from this click, before any asynchronous preflight.
     if (targets.includes('feishu')) {
       try {
-        const granted = await chrome.permissions.request({ permissions: ['debugger', 'clipboardRead', 'clipboardWrite'] })
+        const granted = await requestFeishuClipboardPermissions()
         if (!granted) { setError('未授予飞书粘贴权限，尚未创建飞书文档。'); uploadPending.current = false; return }
       } catch (e) { setError((e as Error).message); uploadPending.current = false; return }
     }
@@ -192,7 +193,7 @@ export function LocalImportPage() {
           </section>
           <aside className="bg-background border rounded-xl overflow-hidden flex flex-col min-h-[600px]">
             <div className="p-4 border-b flex justify-between items-center"><h2 className="font-medium">同步平台</h2><button aria-label="刷新平台登录状态" disabled={locked} onClick={loadPlatforms} className="p-2 rounded hover:bg-muted"><RefreshCw size={16} /></button></div>
-            <p className="text-xs text-muted-foreground px-4 pt-3">飞书首次同步会申请临时调试和剪贴板权限，浏览器可能显示调试提示。请保持此页打开，等待同步结果。</p>
+            <p className="text-xs text-muted-foreground px-4 pt-3">飞书首次同步会申请剪贴板权限，编辑新文档时浏览器可能显示调试提示。请保持此页打开，等待同步结果。</p>
             {status === 'syncing' && <p className="text-xs text-amber-700 px-4 pt-3">当前同步尚未结束，关闭此页不会取消后台上传。</p>}
             <SyncDialog article={syncArticle} platforms={platforms} status={busy ? 'loading' : status} selectedPlatforms={selectedPlatforms} results={results} platformProgress={progress} error={null} onTogglePlatform={id => selectPlatforms(selectedPlatforms.includes(id) ? selectedPlatforms.filter(value => value !== id) : [...selectedPlatforms, id])} onSelectAll={() => selectPlatforms(platforms.filter(platform => platform.isAuthenticated).map(platform => platform.id))} onDeselectAll={() => selectPlatforms([])} onStartSync={() => startSync()} onRetryFailed={() => startSync(results.filter(result => !result.success).map(result => result.platform))} onReset={reset} onCancel={() => setError('后台上传正在进行，暂不支持取消；请等待结果，避免重复创建文档。')} className="flex-1" />
           </aside>

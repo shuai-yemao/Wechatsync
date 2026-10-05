@@ -3,7 +3,8 @@ import { createdDocument, feishuOrigin, prepareFeishuHtml, verifyFeishuSaved, ty
 const permissions = ['debugger', 'clipboardRead', 'clipboardWrite']
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 export async function requireFeishuPermissions(): Promise<void> {
-  if (!await chrome.permissions.contains({ permissions })) throw new Error('请在同步按钮处授权飞书所需的临时调试与剪贴板权限')
+  if (!await chrome.permissions.contains({ permissions: ['debugger'] })) throw new Error('插件调试权限未生效，请在扩展管理页重新加载修复版后再同步')
+  if (!await chrome.permissions.contains({ permissions })) throw new Error('请在同步按钮处授权飞书所需的剪贴板权限')
 }
 
 export async function selectFeishuTab(): Promise<{ tabId: number; origin: string }> {
