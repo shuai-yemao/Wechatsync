@@ -284,7 +284,7 @@ export async function performSync(
   // MCP/CLI 路径没有 senderTabId，需要找一个可用 tab 做 DOM 预处理
   // 同源平台跳过预处理（如微信到微信）
   const sourcePlatform = (article as any).source?.platform
-  const platformsToPreprocess = dslPlatformIds.filter((id: string) => id !== sourcePlatform)
+  const platformsToPreprocess = dslPlatformIds.filter((id: string) => id !== sourcePlatform && id !== 'feishu')
   let processedArticle: typeof normalizedArticle & { platformContents?: Record<string, { html: string; markdown: string }> } = normalizedArticle
   if (platformsToPreprocess.length > 0) {
     const configs = getPlatformPreprocessConfigs(platformsToPreprocess)
@@ -296,7 +296,9 @@ export async function performSync(
     }
     const rawHtml = normalizedArticle.html || normalizedArticle.content || ''
     if (rawHtml) {
-      const preprocessResult = await sendPreprocessMessage(rawHtml, platformsToPreprocess, configs)
+      const preprocessResult = source === 'local'
+        ? await preprocessViaTemporaryTab({ type: 'PREPROCESS_FOR_PLATFORMS', payload: { rawHtml, platforms: platformsToPreprocess, configs } })
+        : await sendPreprocessMessage(rawHtml, platformsToPreprocess, configs)
       if (preprocessResult) {
         processedArticle = { ...normalizedArticle, platformContents: preprocessResult }
         logger.debug('Preprocessed for platforms:', Object.keys(preprocessResult))
@@ -497,14 +499,27 @@ const PREPROCESSOR_URL = chrome.runtime.getURL('src/preprocessor/index.html')
  * 创建临时最小化窗口加载预处理页面，处理完后关闭
  * 使用独立窗口避免在用户 tab 栏闪烁
  */
-async function preprocessViaTemporaryTab(
+export async function preprocessViaTemporaryTab(
   message: { type: string; payload: unknown }
 ): Promise<Record<string, { html: string; markdown: string }> | null> {
   let windowId: number | undefined
-  let tabId: number | undefined
+  let connected: chrome.runtime.Port | undefined
+  const requestId = crypto.randomUUID()
+  let finish: (value: Record<string, { html: string; markdown: string }> | null) => void = () => {}
+  const response = new Promise<Record<string, { html: string; markdown: string }> | null>(resolve => { finish = resolve })
+  const timeout = setTimeout(() => finish(null), 10000)
+  const onConnect = (port: chrome.runtime.Port) => {
+    if (port.name !== `local-preprocess:${requestId}` || port.sender?.id !== chrome.runtime.id ||
+      port.sender?.url !== `${PREPROCESSOR_URL}#${requestId}`) return
+    connected = port
+    port.onMessage.addListener(result => finish(result?.platformContents || null))
+    port.onDisconnect.addListener(() => finish(null))
+    port.postMessage(message)
+  }
+  chrome.runtime.onConnect.addListener(onConnect)
   try {
     const win = await chrome.windows.create({
-      url: PREPROCESSOR_URL,
+      url: `${PREPROCESSOR_URL}#${requestId}`,
       type: 'popup',
       width: 1,
       height: 1,
@@ -513,38 +528,16 @@ async function preprocessViaTemporaryTab(
       focused: false,
     })
     windowId = win.id
-    tabId = win.tabs?.[0]?.id
-    if (!tabId) return null
-
-    // 等待 tab 加载完成
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(listener)
-        reject(new Error('Tab load timeout'))
-      }, 5000)
-      const listener = (id: number, info: chrome.tabs.TabChangeInfo) => {
-        if (id === tabId && info.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(listener)
-          clearTimeout(timeout)
-          resolve()
-        }
-      }
-      chrome.tabs.onUpdated.addListener(listener)
-    })
-
-    const response = await chrome.tabs.sendMessage(tabId, message)
-    if (response?.platformContents) {
-      logger.debug('Preprocessed via temporary window')
-      return response.platformContents
-    }
-    return null
+    return await response
   } catch (error) {
     logger.debug('Temporary window preprocess failed:', error)
     return null
   } finally {
+    clearTimeout(timeout)
+    chrome.runtime.onConnect.removeListener(onConnect)
+    connected?.disconnect()
     if (windowId) {
       chrome.windows.remove(windowId).catch(() => {})
     }
   }
 }
-

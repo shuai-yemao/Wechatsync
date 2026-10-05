@@ -108,6 +108,7 @@ export default defineConfig(({ mode }) => {
         editor: resolve(__dirname, 'src/editor/index.html'),
         'sync-dialog': resolve(__dirname, 'src/sync-dialog/index.html'),
         preprocessor: resolve(__dirname, 'src/preprocessor/index.html'),
+        'local-import': resolve(__dirname, 'src/local-import/index.html'),
       },
     },
   },

@@ -9,6 +9,7 @@ import {
   type SyncResult,
 } from '@wechatsync/core'
 import { createExtensionRuntime } from '../runtime/extension'
+import { FeishuAdapter } from './feishu'
 import { createLogger } from '../lib/logger'
 import {
   trackSyncStart,
@@ -78,6 +79,7 @@ function getPrivateAdapters(): AdapterConstructor[] {
 
 // 所有适配器类列表
 const ADAPTER_CLASSES: AdapterConstructor[] = [
+  FeishuAdapter,
   ZhihuAdapter,
   JuejinAdapter,
   WeiboAdapter,

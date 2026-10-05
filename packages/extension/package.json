@@ -20,11 +20,16 @@
     "defuddle": "^0.14.0",
     "js-md5": "^0.8.3",
     "juice": "^11.0.3",
+    "linkedom": "^0.18.12",
     "lucide-react": "^0.303.0",
+    "marked": "^17.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^7.11.0",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
     "tailwind-merge": "^2.2.0",
+    "unified": "^11.0.5",
     "zustand": "^4.4.7"
   },
   "devDependencies": {

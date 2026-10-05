@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Settings, Plus, Clock, X, Download, Info } from 'lucide-react'
+import { Settings, Plus, Clock, X, Download, Info, FileUp } from 'lucide-react'
 import { useSyncStore } from '../stores/sync'
 import { SettingsDrawer } from '../components/SettingsDrawer'
 import { SyncDialog } from '@/components/sync-dialog'
@@ -108,6 +108,18 @@ export function HomeNew() {
 
   // Start sync with rate-limit check
   const handleStartSync = async () => {
+    if (selectedPlatforms.includes('feishu')) {
+      try {
+        const granted = await chrome.permissions.request({ permissions: ['debugger', 'clipboardRead', 'clipboardWrite'] })
+        if (!granted) {
+          setRateLimitWarning('未授予飞书粘贴权限，尚未创建飞书文档。')
+          return
+        }
+      } catch (error) {
+        setRateLimitWarning((error as Error).message)
+        return
+      }
+    }
     const warning = await checkRateLimit()
     if (warning) {
       setRateLimitWarning(warning)
@@ -127,6 +139,13 @@ export function HomeNew() {
           <h1 className="font-semibold">文章同步助手</h1>
         </div>
         <nav className="flex items-center gap-0.5">
+          <button
+            onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('src/local-import/index.html') })}
+            className="flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg hover:bg-muted transition-colors"
+          >
+            <FileUp className="w-3.5 h-3.5" />
+            <span className="text-[10px] text-muted-foreground leading-none">导入</span>
+          </button>
           <button
             onClick={() => navigate('/add-cms')}
             className="flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg hover:bg-muted transition-colors"

@@ -28,6 +28,10 @@ import {
 import { checkSyncFrequency, recordSync } from '../lib/rate-limit'
 import { checkForUpdates, isUpdateDismissed } from '../lib/version-check'
 import { fetchRemoteConfig, fetchConfigIfNeeded } from '../lib/remote-config'
+import { authorizeOneNote, disconnectOneNote } from '../lib/onenote/auth'
+import { readOneNotePage, validateOneNoteSource } from '../lib/onenote/reader'
+import { isTrustedExtensionPage } from '../lib/trusted-page'
+import { preprocessViaTemporaryTab } from './sync-service'
 
 const logger = createLogger('Background')
 
@@ -122,6 +126,8 @@ async function clearSyncState() {
 
 // 消息类型
 type MessageAction =
+  | { type: 'ONENOTE_READ'; payload: { sourceUrl: string; clientId: string } }
+  | { type: 'ONENOTE_DISCONNECT' }
   | { type: 'GET_PLATFORMS' }
   | { type: 'CHECK_ALL_AUTH'; payload?: { forceRefresh?: boolean } }
   | { type: 'CHECK_AUTH'; payload: { platformId: string } }
@@ -159,7 +165,23 @@ chrome.runtime.onMessage.addListener((message: MessageAction, sender, sendRespon
 })
 
 async function handleMessage(message: MessageAction, sender?: chrome.runtime.MessageSender) {
+  if (message.type === 'ONENOTE_READ' || message.type === 'ONENOTE_DISCONNECT' ||
+    (message.type === 'SYNC_ARTICLE' && (message.payload?.source === 'local' || message.payload?.platforms?.includes('feishu'))) ||
+    (message.type === 'START_SYNC_FROM_EDITOR' && message.platforms?.includes('feishu'))) {
+    if (!isTrustedExtensionPage(sender)) throw new Error('此操作只能由插件自己的预览或同步页面发起。')
+  }
   switch (message.type) {
+    case 'ONENOTE_READ': {
+      const { sourceUrl, clientId } = message.payload
+      if (typeof sourceUrl !== 'string' || typeof clientId !== 'string') throw new Error('OneNote 请求参数无效。')
+      validateOneNoteSource(sourceUrl)
+      const token = await authorizeOneNote(clientId)
+      return { page: await readOneNotePage(sourceUrl, token) }
+    }
+    case 'ONENOTE_DISCONNECT': {
+      await disconnectOneNote()
+      return { success: true }
+    }
     case 'GET_PLATFORMS': {
       await initAdapters()
       const platforms = getAllPlatformMetas()
@@ -240,32 +262,41 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
       // 如果没有 platformContents，请求 content script 预处理
       // 同源平台跳过预处理（如微信到微信，源内容已是目标格式）
       const sourcePlatform = article.source?.platform
-      const platformsToPreprocess = dslPlatformIds.filter((id: string) => id !== sourcePlatform)
+      const platformsToPreprocess = dslPlatformIds.filter((id: string) => id !== sourcePlatform && id !== 'feishu')
       let processedArticle = article
       if (!article.platformContents && platformsToPreprocess.length > 0) {
         try {
           const configs = getPlatformPreprocessConfigs(platformsToPreprocess)
           const rawHtml = article.html || article.content || ''
           if (rawHtml) {
-            // 获取目标 tabId：优先使用 sender tab，否则获取当前活动标签页
-            let targetTabId = senderTabId
-            if (!targetTabId) {
-              const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
-              targetTabId = activeTab?.id
-            }
-
-            if (targetTabId) {
-              const response = await chrome.tabs.sendMessage(targetTabId, {
+            if (source === 'local') {
+              const platformContents = await preprocessViaTemporaryTab({
                 type: 'PREPROCESS_FOR_PLATFORMS',
                 payload: { rawHtml, platforms: platformsToPreprocess, configs },
               })
-              if (response?.platformContents) {
-                processedArticle = { ...article, platformContents: response.platformContents }
-                logger.debug('Preprocessed for platforms:', Object.keys(response.platformContents))
+              if (!platformContents) throw new Error('本地文档的平台格式转换失败，请重新预览后再上传。')
+              processedArticle = { ...article, platformContents }
+            } else {
+              // 网页来源保留原 content script 转换路径。
+              let targetTabId = senderTabId
+              if (!targetTabId) {
+                const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+                targetTabId = activeTab?.id
+              }
+              if (targetTabId) {
+                const response = await chrome.tabs.sendMessage(targetTabId, {
+                  type: 'PREPROCESS_FOR_PLATFORMS',
+                  payload: { rawHtml, platforms: platformsToPreprocess, configs },
+                })
+                if (response?.platformContents) {
+                  processedArticle = { ...article, platformContents: response.platformContents }
+                  logger.debug('Preprocessed for platforms:', Object.keys(response.platformContents))
+                }
               }
             }
           }
         } catch (error) {
+          if (source === 'local') throw error
           // 预处理失败，继续使用原始内容
           logger.debug('Preprocess failed, using original content:', error)
         }
@@ -963,6 +994,9 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
 
     case 'MAGIC_CALL': {
       const { methodName, data } = message.payload
+      if ((data.account?.type || data.platform) === 'feishu') {
+        return { error: '飞书同步请通过插件预览页面发起。' }
+      }
 
       try {
         // 获取平台适配器

@@ -313,11 +313,11 @@ function RowInfo({
     }
     if (!result.success) {
       return (
-        <span
-          className="text-xs text-red-500 dark:text-red-400 truncate max-w-[120px] flex-shrink-0"
-          title={result.error}
-        >
-          {result.error || '失败'}
+        <span className="flex items-center gap-1 flex-shrink-0">
+          <span className="text-xs text-red-500 dark:text-red-400 truncate max-w-[120px]" title={result.error}>
+            {result.error || '失败'}
+          </span>
+          {result.postUrl && <a href={result.postUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline" onClick={e => e.stopPropagation()}>检查文档</a>}
         </span>
       )
     }
