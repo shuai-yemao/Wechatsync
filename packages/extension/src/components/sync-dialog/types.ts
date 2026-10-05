@@ -5,6 +5,7 @@ export interface Platform {
   homepage?: string
   isAuthenticated: boolean
   username?: string
+  error?: string
 }
 
 export interface Article {

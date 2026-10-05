@@ -57,7 +57,7 @@ export function HomeNew() {
           setAllPlatforms(cached.platformListCache.map((p: any) => ({
             id: p.id, name: p.name, icon: p.icon,
             isAuthenticated: p.isAuthenticated, username: p.username,
-            homepage: p.homepage,
+            homepage: p.homepage, error: p.error,
           })))
         }
       } catch {}
@@ -85,7 +85,7 @@ export function HomeNew() {
       const mapped: DialogPlatform[] = (response.platforms || []).map((p: any) => ({
         id: p.id, name: p.name, icon: p.icon,
         isAuthenticated: p.isAuthenticated, username: p.username,
-        homepage: p.homepage,
+        homepage: p.homepage, error: p.error,
       }))
       setAllPlatforms(mapped)
       await loadPlatforms()

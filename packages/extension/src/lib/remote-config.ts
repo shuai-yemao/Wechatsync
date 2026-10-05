@@ -5,6 +5,8 @@ const logger = createLogger('RemoteConfig')
 const CONFIG_URL = 'https://wpics.oss-cn-shanghai.aliyuncs.com/wechatsync-config.json'
 const STORAGE_KEY_BANNERS = 'remoteBanners'
 const STORAGE_KEY_LAST_FETCH = 'remoteBanners_lastFetch'
+const STORAGE_KEY_LAST_ATTEMPT = 'remoteBanners_lastAttempt'
+const STORAGE_KEY_STATUS = 'remoteConfigStatus'
 const STORAGE_KEY_DISMISSED = 'dismissedBanners'
 const CHECK_INTERVAL_HOURS = 6
 
@@ -49,14 +51,36 @@ function isDateValid(banner: RemoteBanner): boolean {
 
 // ── Fetch & cache ──
 
-export async function fetchRemoteConfig(): Promise<void> {
+let pendingFetch: Promise<void> | null = null
+
+export function fetchRemoteConfig(): Promise<void> {
+  // Installation and worker activation can request the same optional config together.
+  if (pendingFetch) return pendingFetch
+  pendingFetch = performFetch().finally(() => { pendingFetch = null })
+  return pendingFetch
+}
+
+async function performFetch(): Promise<void> {
+  const attemptedAt = Date.now()
   try {
+    // Record attempts, including failures, to avoid retrying on every worker wake-up.
+    await chrome.storage.local.set({ [STORAGE_KEY_LAST_ATTEMPT]: attemptedAt })
     const response = await fetch(CONFIG_URL, {
       cache: 'no-cache',
       headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) {
-      logger.warn('Config fetch failed:', response.status)
+      await chrome.storage.local.set({
+        [STORAGE_KEY_STATUS]: {
+          state: response.status === 404 ? 'unavailable' : 'error',
+          httpStatus: response.status,
+          attemptedAt,
+        },
+      })
+      // A missing announcement file is optional; keep cached banners and retry later.
+      if (response.status === 404) logger.debug('Announcement config unavailable; using cache')
+      else logger.warn('Config fetch failed:', response.status)
       return
     }
     const config: RemoteConfig = await response.json()
@@ -70,17 +94,21 @@ export async function fetchRemoteConfig(): Promise<void> {
     await chrome.storage.local.set({
       [STORAGE_KEY_BANNERS]: validBanners,
       [STORAGE_KEY_LAST_FETCH]: Date.now(),
+      [STORAGE_KEY_STATUS]: { state: 'ok', attemptedAt },
     })
     logger.debug('Config updated:', validBanners.length, 'banners')
   } catch (e) {
+    await chrome.storage.local.set({
+      [STORAGE_KEY_STATUS]: { state: 'error', attemptedAt, error: e instanceof Error ? e.message : String(e) },
+    }).catch(() => {})
     logger.warn('Failed to fetch config:', e)
   }
 }
 
 export async function fetchConfigIfNeeded(): Promise<void> {
   try {
-    const r = await chrome.storage.local.get(STORAGE_KEY_LAST_FETCH)
-    const last = r[STORAGE_KEY_LAST_FETCH] as number | undefined
+    const r = await chrome.storage.local.get([STORAGE_KEY_LAST_ATTEMPT, STORAGE_KEY_LAST_FETCH])
+    const last = (r[STORAGE_KEY_LAST_ATTEMPT] || r[STORAGE_KEY_LAST_FETCH]) as number | undefined
     if (!last || Date.now() - last >= CHECK_INTERVAL_HOURS * 60 * 60 * 1000) {
       await fetchRemoteConfig()
     }

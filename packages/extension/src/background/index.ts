@@ -1161,7 +1161,7 @@ chrome.runtime.onInstalled.addListener(async details => {
   trackInstall(details.reason, details.previousVersion).catch(() => {})
 
   // 拉取远程配置
-  fetchRemoteConfig().catch(() => {})
+  fetchConfigIfNeeded().catch(() => {})
 
   // 记录安装时间（用于首次同步追踪）
   if (details.reason === 'install') {

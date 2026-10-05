@@ -359,8 +359,8 @@ function RowInfo({
   // Idle
   if (!platform.isAuthenticated) {
     return (
-      <span className="text-xs text-muted-foreground flex items-center gap-0.5 flex-shrink-0">
-        去登录 <ChevronRight className="w-3 h-3" />
+      <span title={platform.error} className="text-xs text-muted-foreground flex items-center gap-0.5 flex-shrink-0">
+        {platform.error ? '检查登录' : '去登录'} <ChevronRight className="w-3 h-3" />
       </span>
     )
   }

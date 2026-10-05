@@ -52,6 +52,8 @@ export class WeiboAdapter extends CodeAdapter {
   ]
 
   async checkAuth(): Promise<AuthResult> {
+    // Explicit rechecks must detect logout instead of reusing a cached user forever.
+    this.userConfig = null
     try {
       const config = await this.getUserConfig()
 
@@ -66,7 +68,7 @@ export class WeiboAdapter extends CodeAdapter {
 
       return { isAuthenticated: false }
     } catch (error) {
-      logger.debug('checkAuth: not logged in -', error)
+      logger.debug('Authentication check unavailable:', error)
       return { isAuthenticated: false, error: (error as Error).message }
     }
   }
@@ -82,12 +84,14 @@ export class WeiboAdapter extends CodeAdapter {
     const response = await this.runtime.fetch('https://card.weibo.com/article/v5/editor', {
       credentials: 'include',
     })
+    if (response.status === 401) return null
+    if (!response.ok) throw new Error(`微博登录检查失败：HTTP ${response.status}，请稍后重试`)
     const html = await response.text()
 
     const configMatch = html.match(/config:\s*JSON\.parse\('(.+?)'\)/)
     if (!configMatch) {
-      logger.error('Failed to find config in HTML')
-      return null
+      // Guest/login HTML and editor changes are authentication diagnostics, not worker failures.
+      throw new Error('微博编辑器未返回用户信息，请登录微博后重试；已登录时可能是页面结构变化')
     }
 
     try {
@@ -106,9 +110,8 @@ export class WeiboAdapter extends CodeAdapter {
 
       logger.debug('User config:', this.userConfig)
       return this.userConfig
-    } catch (e) {
-      logger.error('Failed to parse config:', e)
-      return null
+    } catch {
+      throw new Error('微博编辑器用户配置格式异常，请刷新微博编辑器后重试')
     }
   }
 
