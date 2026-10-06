@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createdDocument, feishuOrigin, prepareFeishuHtml, verifyFeishuSaved } from '../src/lib/feishu/protocol'
+import { createdDocument, feishuDocumentOrigin, feishuOrigin, prepareFeishuHtml, verifyFeishuSaved } from '../src/lib/feishu/protocol'
 import { createFeishuDocument, pasteAndVerifyFeishu, selectFeishuTab } from '../src/lib/feishu/browser'
 import { FeishuAdapter } from '../src/adapters/feishu'
 
@@ -115,8 +115,25 @@ describe('Feishu tenant and create boundaries', () => {
     const other = structuredClone(created); other.data.entities.nodes.node.url = 'https://evil.test/docx/' + token
     expect(() => createdDocument(other, origin)).toThrow('当前租户')
   })
+  it('rejects recruitment, marketing and login pages as document destinations', () => {
+    for (const url of ['https://agirobot.jobs.feishu.cn/campusrecruitment/position/123/detail', 'https://jobs.feishu.cn/drive/home/', 'https://www.feishu.cn/product/docs', 'https://accounts.feishu.cn/docx/SomeToken', origin, origin + '/campusrecruitment/']) expect(feishuDocumentOrigin(url)).toBeNull()
+    for (const path of ['/drive/home/', '/docx/SomeToken', '/docs/SomeToken', '/wiki/SomeToken', '/sheets/SomeToken']) expect(feishuDocumentOrigin(origin + path)).toBe(origin)
+    expect(feishuDocumentOrigin('https://test.larksuite.com/drive/home/')).toBe('https://test.larksuite.com')
+  })
+  it('ignores the active recruitment tab and selects an actual cloud document', async () => {
+    vi.mocked(chrome.tabs.query).mockResolvedValue([{ id: 1, url: 'https://agirobot.jobs.feishu.cn/campusrecruitment/position/123/detail', active: true }, { id: 2, url: origin + '/drive/home/', active: false }] as chrome.tabs.Tab[])
+    expect(await selectFeishuTab()).toEqual({ tabId: 2, origin })
+  })
+  it('does not report cloud document authentication or create when only a recruitment page is open', async () => {
+    vi.mocked(chrome.tabs.query).mockResolvedValue([{ id: 1, url: 'https://agirobot.jobs.feishu.cn/campusrecruitment/position/123/detail', active: true }] as chrome.tabs.Tab[])
+    expect((await new FeishuAdapter().checkAuth()).isAuthenticated).toBe(false)
+    expect((await new FeishuAdapter().publish({ title: '测试', markdown: '正文' })).success).toBe(false)
+    expect(chrome.cookies.getAll).not.toHaveBeenCalled()
+    expect(chrome.scripting.executeScript).not.toHaveBeenCalled()
+    expect(chrome.tabs.create).not.toHaveBeenCalled()
+  })
   it('requires an unambiguous selected tenant', async () => {
-    vi.mocked(chrome.tabs.query).mockResolvedValue([{ id: 1, url: origin }, { id: 2, url: 'https://other.feishu.cn' }] as chrome.tabs.Tab[])
+    vi.mocked(chrome.tabs.query).mockResolvedValue([{ id: 1, url: origin + '/drive/home/' }, { id: 2, url: 'https://other.feishu.cn/docx/SomeToken' }] as chrome.tabs.Tab[])
     await expect(selectFeishuTab()).rejects.toThrow('多个')
     vi.mocked(chrome.tabs.query).mockResolvedValue([])
     await expect(selectFeishuTab()).rejects.toThrow('登录')

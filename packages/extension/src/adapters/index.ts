@@ -280,7 +280,9 @@ export async function checkAllPlatformsAuth(forceRefresh = false) {
   for (const meta of metas) {
     const cached = cache[meta.id]
     const cacheTTL = cached?.isAuthenticated ? AUTH_CACHE_TTL_AUTHENTICATED : AUTH_CACHE_TTL_UNAUTHENTICATED
-    const cacheValid = cached && (now - cached.timestamp < cacheTTL) && !forceRefresh
+    // Feishu authentication depends on a currently open cloud-document tab.
+    // Recheck its destination after a tab is closed or navigates to another site.
+    const cacheValid = meta.id !== 'feishu' && cached && (now - cached.timestamp < cacheTTL) && !forceRefresh
 
     if (cacheValid) {
       logger.debug(` Using cached auth for ${meta.id} (TTL: ${cacheTTL / 1000}s)`)

@@ -11,7 +11,7 @@ const logger = createLogger('Feishu')
 export class FeishuAdapter implements PlatformAdapter {
   readonly meta: PlatformMeta = {
     id: 'feishu', name: '飞书文档', icon: 'https://www.feishu.cn/favicon.ico',
-    homepage: 'https://www.feishu.cn', capabilities: ['article', 'image_upload'],
+    homepage: 'https://feishu.cn/drive/home/', capabilities: ['article', 'image_upload'],
   }
   readonly preprocessConfig = { outputFormat: 'html' as const, removeLinks: false, processCodeBlocks: false }
   private publishing = false

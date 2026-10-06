@@ -14,9 +14,17 @@ export function feishuOrigin(value: string): string | null {
     const url = new URL(value)
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return null
     if (!['feishu.cn', 'larksuite.com', 'larkoffice.com'].some(domain => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) return null
-    if (/^(accounts?|passport|open|login)\./.test(url.hostname)) return null
+    if (/(^|\.)(accounts?|passport|open|login|jobs|www)\./.test(url.hostname)) return null
     return url.origin
   } catch { return null }
+}
+
+/** A Feishu-branded site can share login cookies without hosting cloud documents. */
+export function feishuDocumentOrigin(value: string): string | null {
+  const origin = feishuOrigin(value)
+  if (!origin) return null
+  const { pathname } = new URL(value)
+  return /^\/(drive|space|docx|docs|wiki|sheets|base|bitable|mindnotes|slides)(\/|$)/.test(pathname) ? origin : null
 }
 
 /** Accept only the new document returned by this create call, never an arbitrary URL. */

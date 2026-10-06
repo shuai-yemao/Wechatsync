@@ -1,4 +1,4 @@
-import { createdDocument, feishuOrigin, prepareFeishuHtml, verifyFeishuSaved, type PreparedContent } from './protocol'
+import { createdDocument, feishuDocumentOrigin, prepareFeishuHtml, verifyFeishuSaved, type PreparedContent } from './protocol'
 
 const permissions = ['debugger', 'clipboardRead', 'clipboardWrite']
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -8,13 +8,13 @@ export async function requireFeishuPermissions(): Promise<void> {
 }
 
 export async function selectFeishuTab(): Promise<{ tabId: number; origin: string }> {
-  const tabs = (await chrome.tabs.query({})).filter(tab => typeof tab.id === 'number' && tab.url && feishuOrigin(tab.url))
+  const tabs = (await chrome.tabs.query({})).filter(tab => typeof tab.id === 'number' && tab.url && feishuDocumentOrigin(tab.url))
   const active = tabs.filter(tab => tab.active)
   const candidates = active.length === 1 ? active : tabs
-  if (!candidates.length) throw new Error('请先在浏览器打开并登录飞书云文档')
-  if (new Set(candidates.map(tab => feishuOrigin(tab.url!))).size > 1) throw new Error('检测到多个飞书租户，请只保留一个活动的飞书租户标签页后重试')
+  if (!candidates.length) throw new Error('请先在浏览器打开并登录飞书云文档主页或任意云文档；招聘和官网页面无法接收文档')
+  if (new Set(candidates.map(tab => feishuDocumentOrigin(tab.url!))).size > 1) throw new Error('检测到多个飞书租户，请只保留一个活动的飞书租户标签页后重试')
   const tab = candidates[0]
-  return { tabId: tab.id!, origin: feishuOrigin(tab.url!)! }
+  return { tabId: tab.id!, origin: feishuDocumentOrigin(tab.url!)! }
 }
 
 async function request(tabId: number, origin: string, path: string, form?: Record<string, string>): Promise<any> {
