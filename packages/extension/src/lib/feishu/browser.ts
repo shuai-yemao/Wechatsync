@@ -120,6 +120,15 @@ async function readSaved(tabId: number, origin: string, token: string): Promise<
   return merged
 }
 
+async function activateFeishuTab(tabId: number): Promise<void> {
+  const tab = await chrome.tabs.get(tabId)
+  if (typeof tab.windowId === 'number') {
+    const window = await chrome.windows.get(tab.windowId)
+    await chrome.windows.update(tab.windowId, { focused: true, ...(window.state === 'minimized' ? { state: 'normal' as const } : {}) })
+  }
+  await chrome.tabs.update(tabId, { active: true })
+}
+
 /** Attach only to the new tab; backup/restore clipboard in its isolated world. */
 export async function pasteAndVerifyFeishu(tabId: number, origin: string, token: string, content: PreparedContent, onStage?: (stage: string) => void): Promise<void> {
   const target = { tabId }
@@ -129,13 +138,21 @@ export async function pasteAndVerifyFeishu(tabId: number, origin: string, token:
     onStage?.('连接新文档编辑器')
     await chrome.debugger.attach(target, '1.3'); attached = true
     await chrome.debugger.sendCommand(target, 'Emulation.setFocusEmulationEnabled', { enabled: true })
-    await chrome.tabs.update(tabId, { active: true })
-    for (let attempt = 0; attempt < 40; attempt++) {
+    await activateFeishuTab(tabId)
+    for (let attempt = 0; attempt < 120; attempt++) {
       const tab = await chrome.tabs.get(tabId)
       const url = new URL(tab.pendingUrl || tab.url || `${origin}${pathname}`)
       if (url.origin !== origin || url.pathname !== pathname) throw new Error('新文档页面已导航，停止输入')
-      if (tab.status === 'complete') break
-      if (attempt === 39) throw new Error('新文档页面加载超时')
+      // Third-party scripts can keep tabs.status="loading" after the editor is
+      // usable. Wait for the actual document/editor, not every page resource.
+      if (tab.url && new URL(tab.url).origin === origin && new URL(tab.url).pathname === pathname) {
+        const [ready] = await chrome.scripting.executeScript({ target, injectImmediately: true,
+          func: (expectedOrigin: string, expectedPath: string) => location.origin === expectedOrigin && location.pathname === expectedPath && document.readyState !== 'loading' && !!document.querySelector('[contenteditable="true"]'),
+          args: [origin, pathname],
+        })
+        if (ready?.result === true) break
+      }
+      if (attempt === 119) throw new Error('新文档编辑器加载超时（等待 60 秒），请检查网络后打开已创建文档')
       await sleep(500)
     }
     onStage?.('读取新文档空白状态')
@@ -160,10 +177,13 @@ export async function pasteAndVerifyFeishu(tabId: number, origin: string, token:
           const rect = el.getBoundingClientRect()
           return rect.width > 0 && rect.height > 0 && (el.isContentEditable || !!el.querySelector('[contenteditable="true"]')) && !el.closest('[class*="title"], [class*="Title"]')
         })
-        if (!editor) return null
+        if (!editor || innerWidth <= 0 || innerHeight <= 0) return null
         editor.scrollIntoView({ block: 'center' })
         const rect = editor.getBoundingClientRect()
-        return { x: rect.left + Math.min(rect.width / 2, 20), y: rect.top + Math.min(rect.height / 2, 12) }
+        const left = Math.max(0, rect.left), top = Math.max(0, rect.top)
+        const right = Math.min(innerWidth, rect.right), bottom = Math.min(innerHeight, rect.bottom)
+        if (right <= left || bottom <= top) return null
+        return { x: left + Math.min((right - left) / 2, 20), y: top + Math.min((bottom - top) / 2, 12) }
       }, args: [origin, pathname, blankBlockId] })
       point = result?.result ?? null
       if (point) break
@@ -171,43 +191,70 @@ export async function pasteAndVerifyFeishu(tabId: number, origin: string, token:
     }
     if (!point) throw new Error('没有找到飞书新文档正文编辑器，页面协议可能发生变化')
     onStage?.('准备剪贴板')
+    await activateFeishuTab(tabId)
     const [copyResult] = await chrome.scripting.executeScript({ target, func: async (expectedOrigin: string, expectedPath: string, html: string, text: string) => {
-      if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航')
-      const scope = globalThis as any
-      const backup = await navigator.clipboard.read()
-      const saved: Record<string, Blob>[] = []
-      for (const item of backup) {
-        const data: Record<string, Blob> = {}
-        for (const type of item.types) {
-          if (!['text/plain', 'text/html', 'image/png'].includes(type)) throw new Error('剪贴板包含无法恢复的格式，请先清空或复制普通文本后重试')
-          data[type] = await item.getType(type)
-        }
-        saved.push(data)
-      }
-      scope.__wechatsyncFeishuClipboard = saved
-      const textarea = document.createElement('textarea')
-      textarea.value = text
-      textarea.style.cssText = 'position:fixed;left:-10000px;top:0'
-      const copy = (event: ClipboardEvent) => {
-        event.preventDefault()
-        event.clipboardData?.setData('text/html', html)
-        event.clipboardData?.setData('text/plain', text)
-      }
+      let stage = '备份剪贴板'
       try {
-        document.body.appendChild(textarea); textarea.focus(); textarea.select()
-        document.addEventListener('copy', copy)
-        if (!document.execCommand('copy')) throw new Error('无法写入剪贴板')
-        const read = await navigator.clipboard.read()
-        const item = read.find(item => item.types.includes('text/html'))
-        if (!item) throw new Error('剪贴板没有 HTML 正文，停止输入')
-        return await (await item.getType('text/html')).text()
-      } finally { document.removeEventListener('copy', copy); textarea.remove() }
+        if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航')
+        const scope = globalThis as any
+        // The permission dialog can return before the newly activated tab gains
+        // clipboard focus. Retry read-only access briefly, before any mutation.
+        let backup: ClipboardItem[] = []
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try { backup = await navigator.clipboard.read(); break }
+          catch (error) {
+            if ((error as Error).name !== 'NotAllowedError' || attempt === 3) throw error
+            await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
+            if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航')
+          }
+        }
+        const saved: Record<string, Blob>[] = []
+        for (const item of backup) {
+          const data: Record<string, Blob> = {}
+          for (const type of item.types) {
+            if (!['text/plain', 'text/html', 'image/png'].includes(type)) throw new Error('剪贴板包含无法恢复的格式，请先清空或复制普通文本后重试')
+            data[type] = await item.getType(type)
+          }
+          saved.push(data)
+        }
+        scope.__wechatsyncFeishuClipboard = saved
+        stage = '写入剪贴板'
+        if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航')
+        // Write our own article directly, without firing the editor's copy
+        // handlers, which can asynchronously replace a DOM-copy clipboard.
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        })])
+        stage = '回读剪贴板'
+        for (let attempt = 0; attempt < 4; attempt++) {
+          if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航')
+          try {
+            const read = await navigator.clipboard.read()
+            const item = read.find(item => item.types.includes('text/html'))
+            if (!item) throw new Error('剪贴板没有 HTML 正文，停止输入')
+            return { ok: true as const, html: await (await item.getType('text/html')).text() }
+          } catch (error) {
+            // A Windows clipboard snapshot can expire while getType reads it.
+            // Re-read only; never overwrite external changes or paste unchecked HTML.
+            if (!/Clipboard data has changed/i.test((error as Error).message) || attempt === 3) throw error
+            await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
+          }
+        }
+        throw new Error('剪贴板回读没有返回正文')
+      } catch (error) {
+        // Rejected injected promises otherwise lose their error in Chrome.
+        return { ok: false as const, error: `${stage}失败：${error instanceof Error ? error.message : String(error)}` }
+      }
     }, args: [origin, pathname, content.html, content.text] })
     clipboardSaved = true
-    if (typeof copyResult?.result !== 'string') throw new Error('飞书剪贴板准备失败')
-    const copied = prepareFeishuHtml(copyResult.result)
+    if (copyResult?.result?.ok !== true) throw new Error(copyResult?.result?.error || '飞书剪贴板准备没有返回结果')
+    const copied = prepareFeishuHtml(copyResult.result.html)
     if (copied.html !== content.html) throw new Error('剪贴板 HTML 回读与正文不一致，停止输入')
     onStage?.('粘贴正文')
+    await activateFeishuTab(tabId)
+    const [visible] = await chrome.scripting.executeScript({ target, func: (x: number, y: number) => innerWidth > 0 && innerHeight > 0 && x >= 0 && y >= 0 && x < innerWidth && y < innerHeight, args: [point.x, point.y] })
+    if (visible?.result !== true) throw new Error('飞书编辑器没有可见的粘贴位置，请恢复浏览器窗口后检查已创建文档')
     for (const type of ['mousePressed', 'mouseReleased']) await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 })
     const [paste] = await chrome.scripting.executeScript({ target, func: (expectedOrigin: string, expectedPath: string) => {
       if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航，停止粘贴')

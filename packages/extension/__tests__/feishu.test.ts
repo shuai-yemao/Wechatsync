@@ -63,6 +63,92 @@ describe('Feishu content and remote verification', () => {
 })
 
 describe('Feishu script injection boundary', () => {
+  async function clipboardScript(loading = false, minimized = false) {
+    let script: any
+    vi.mocked(chrome.debugger.attach).mockResolvedValue(undefined)
+    Object.assign(chrome.tabs, { update: vi.fn(async () => ({})), get: vi.fn(async () => ({ status: loading ? 'loading' : 'complete', url: `${origin}/docx/${token}`, ...(minimized ? { windowId: 7 } : {}) })) })
+    if (minimized) Object.assign(chrome, { windows: { get: vi.fn(async () => ({ state: 'minimized' })), update: vi.fn(async () => ({})) } })
+    vi.mocked(chrome.scripting.executeScript).mockImplementation(async injection => {
+      if (String(injection.args?.[1]).includes('client_vars')) return [{ frameId: 0, result: { ok: true, value: { data: { block_map: { root: { data: { type: 'page' }, children: ['blank'] }, blank: { data: { type: 'text' } } } } } } }]
+      if (injection.args?.length === 3) return [{ frameId: 0, result: { x: 1, y: 1 } }]
+      if (injection.args?.length === 4) { script = injection.func; return [{ frameId: 0, result: { ok: false, error: '备份剪贴板失败：Document is not focused' } }] }
+      return [{ frameId: 0, result: true }]
+    })
+    await expect(pasteAndVerifyFeishu(2, origin, token, prepareFeishuHtml('<p>正文</p>'))).rejects.toThrow('Document is not focused')
+    expect(chrome.debugger.detach).toHaveBeenCalled()
+    return script
+  }
+
+  it('returns the clipboard rejection as diagnostic data without losing its cause', async () => {
+    const script = await clipboardScript()
+    const read = vi.fn(async () => { throw new Error('clipboard unavailable') })
+    vi.stubGlobal('location', { origin, pathname: `/docx/${token}` })
+    vi.stubGlobal('navigator', { clipboard: { read } })
+    try {
+      expect(await script(origin, `/docx/${token}`, '<p>正文</p>', '正文')).toEqual({ ok: false, error: '备份剪贴板失败：clipboard unavailable' })
+      expect(read).toHaveBeenCalledTimes(1)
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('bounds retries for transient focus denial before any clipboard write', async () => {
+    const script = await clipboardScript()
+    const read = vi.fn(async () => { throw Object.assign(new Error('Document is not focused'), { name: 'NotAllowedError' }) })
+    vi.stubGlobal('location', { origin, pathname: `/docx/${token}` })
+    vi.stubGlobal('navigator', { clipboard: { read } })
+    vi.useFakeTimers()
+    try {
+      const pending = script(origin, `/docx/${token}`, '<p>正文</p>', '正文')
+      await vi.runAllTimersAsync()
+      expect((await pending).error).toContain('Document is not focused')
+      expect(read).toHaveBeenCalledTimes(4)
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals() }
+  })
+
+  it('does not write or retry when clipboard formats cannot be restored', async () => {
+    const script = await clipboardScript()
+    const getType = vi.fn()
+    vi.stubGlobal('location', { origin, pathname: `/docx/${token}` })
+    vi.stubGlobal('navigator', { clipboard: { read: vi.fn(async () => [{ types: ['application/custom'], getType }]) } })
+    try {
+      expect((await script(origin, `/docx/${token}`, '<p>正文</p>', '正文')).error).toContain('无法恢复')
+      expect(getType).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('uses editor readiness even when background resources keep the tab loading', async () => {
+    await clipboardScript(true)
+    const ready = vi.mocked(chrome.scripting.executeScript).mock.calls.find(([injection]) => injection.injectImmediately)
+    expect(ready).toBeDefined()
+    expect(chrome.tabs.get).toHaveBeenCalledTimes(3)
+  })
+
+  it('restores a minimized target window before accessing its editor and clipboard', async () => {
+    await clipboardScript(false, true)
+    expect(chrome.windows.update).toHaveBeenCalledWith(7, { state: 'normal', focused: true })
+    expect(chrome.tabs.update).toHaveBeenCalledWith(2, { active: true })
+  })
+
+  it('writes HTML once and re-reads an expired clipboard snapshot without another write', async () => {
+    const script = await clipboardScript()
+    const read = vi.fn()
+      .mockResolvedValueOnce([{ types: ['text/plain'], getType: async () => new Blob(['original'], { type: 'text/plain' }) }])
+      .mockResolvedValueOnce([{ types: ['text/html'], getType: async () => { throw new Error('Clipboard data has changed') } }])
+      .mockResolvedValueOnce([{ types: ['text/html'], getType: async () => new Blob(['<p>正文</p>'], { type: 'text/html' }) }])
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('location', { origin, pathname: `/docx/${token}` })
+    vi.stubGlobal('navigator', { clipboard: { read, write } })
+    vi.stubGlobal('ClipboardItem', class { constructor(public data: Record<string, Blob>) {} })
+    vi.useFakeTimers()
+    try {
+      const pending = script(origin, `/docx/${token}`, '<p>正文</p>', '正文')
+      await vi.runAllTimersAsync()
+      expect(await pending).toEqual({ ok: true, html: '<p>正文</p>' })
+      expect(write).toHaveBeenCalledTimes(1)
+      expect(read).toHaveBeenCalledTimes(3)
+      expect((globalThis as any).__wechatsyncFeishuClipboard[0]['text/plain']).toBeInstanceOf(Blob)
+    } finally { delete (globalThis as any).__wechatsyncFeishuClipboard; vi.useRealTimers(); vi.unstubAllGlobals() }
+  })
+
   it('never passes undefined through Chrome args when reading a saved document', async () => {
     vi.mocked(chrome.debugger.attach).mockResolvedValue(undefined)
     Object.assign(chrome.tabs, { update: vi.fn(async () => ({})), get: vi.fn(async () => ({ status: 'complete', url: `${origin}/docx/${token}` })) })
