@@ -18,32 +18,58 @@ export async function selectFeishuTab(): Promise<{ tabId: number; origin: string
 }
 
 async function request(tabId: number, origin: string, path: string, form?: Record<string, string>): Promise<any> {
-  let csrf = ''
-  for (const name of ['_csrf_token', 'swp_csrf_token']) {
-    const cookie = await chrome.cookies.get({ url: origin, name })
-    if (cookie?.value) { csrf = cookie.value; break }
+  const csrfTokens: string[] = []
+  if (form) {
+    for (const name of ['_csrf_token', 'swp_csrf_token']) {
+      const cookie = await chrome.cookies.get({ url: origin, name })
+      if (cookie?.value && !csrfTokens.includes(cookie.value)) csrfTokens.push(cookie.value)
+    }
+    if (!csrfTokens.length) throw new Error('未找到飞书登录会话的 CSRF 信息，请刷新已登录的云文档页面')
+  } else {
+    csrfTokens.push('')
   }
-  if (form && !csrf) throw new Error('未找到飞书登录会话的 CSRF 信息，请刷新已登录的云文档页面')
-  const [execution] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: async (expectedOrigin: string, apiPath: string, token: string, fields?: Record<string, string>) => {
-      if (location.origin !== expectedOrigin) throw new Error('飞书标签页已导航，停止请求')
-      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000)
-      try {
-        const headers: Record<string, string> = { Accept: 'application/json', 'doc-biz': 'Lark' }
-        if (token) headers['x-csrftoken'] = token
-        if (fields) headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8'
-        const response = await fetch(apiPath, { method: fields ? 'POST' : 'GET', credentials: 'include', redirect: 'error', headers, body: fields ? new URLSearchParams(fields).toString() : undefined, signal: controller.signal })
-        if (!response.ok) throw new Error(`飞书请求失败 HTTP ${response.status}`)
-        const json = await response.json()
-        if (json.code !== 0) throw new Error(`飞书请求失败 code=${String(json.code)} ${String(json.msg ?? '').slice(0, 160)}`)
-        return json
-      } finally { clearTimeout(timer) }
-    },
-    args: [origin, path, csrf, form],
-  })
-  if (!execution?.result) throw new Error('飞书页面没有返回请求结果')
-  return execution.result
+  for (let attempt = 0; attempt < csrfTokens.length; attempt++) {
+    const [execution] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: async (expectedOrigin: string, apiPath: string, token: string, fields: Record<string, string> | null) => {
+        const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000)
+        try {
+          if (location.origin !== expectedOrigin) throw new Error('飞书标签页已导航，停止请求')
+          const headers: Record<string, string> = { Accept: 'application/json', 'doc-biz': 'Lark' }
+          if (token) headers['x-csrftoken'] = token
+          if (fields) {
+            headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8'
+            const requestId = crypto.randomUUID().replace(/-/g, '')
+            headers['request-id'] = requestId
+            headers['x-request-id'] = requestId
+            headers['x-tt-trace-id'] = requestId
+          }
+          const response = await fetch(apiPath, { method: fields ? 'POST' : 'GET', credentials: 'include', redirect: 'error', headers, body: fields ? new URLSearchParams(fields).toString() : undefined, signal: controller.signal })
+          const raw = await response.text()
+          if (!response.ok) {
+            const csrfRejected = response.status === 403 && /csrf/i.test(raw.slice(0, 512))
+            return { ok: false as const, error: `飞书请求失败 HTTP ${response.status}${csrfRejected ? '（CSRF 校验失败）' : ''}`, csrfRejected }
+          }
+          let json
+          try { json = JSON.parse(raw) } catch { throw new Error('飞书接口返回非 JSON 内容，请确认云文档登录状态') }
+          if (json.code !== 0) throw new Error(`飞书请求失败 code=${String(json.code)} ${String(json.msg ?? '').slice(0, 160)}`)
+          return { ok: true as const, value: json }
+        } catch (error) {
+          // Chrome discards rejected injected promises. Return diagnostics as data.
+          return { ok: false as const, error: error instanceof Error ? error.message : String(error), csrfRejected: false }
+        } finally { clearTimeout(timer) }
+      },
+      // Chrome rejects undefined in args before running the injected function.
+      args: [origin, path, csrfTokens[attempt], form ?? null],
+    })
+    const result = execution?.result
+    if (result?.ok === true) return result.value
+    if (!result) throw new Error('飞书页面没有返回请求结果')
+    // Only a definite CSRF rejection permits another POST; never retry ambiguous failures.
+    if (form && result.csrfRejected && attempt + 1 < csrfTokens.length) continue
+    throw new Error(result.error || '飞书页面请求失败')
+  }
+  throw new Error('飞书 CSRF 校验失败，请刷新已登录的云文档页面')
 }
 
 export async function createFeishuDocument(tabId: number, origin: string, title: string): Promise<{ token: string; url: string }> {
@@ -95,11 +121,12 @@ async function readSaved(tabId: number, origin: string, token: string): Promise<
 }
 
 /** Attach only to the new tab; backup/restore clipboard in its isolated world. */
-export async function pasteAndVerifyFeishu(tabId: number, origin: string, token: string, content: PreparedContent): Promise<void> {
+export async function pasteAndVerifyFeishu(tabId: number, origin: string, token: string, content: PreparedContent, onStage?: (stage: string) => void): Promise<void> {
   const target = { tabId }
   const pathname = `/docx/${token}`
   let attached = false, clipboardSaved = false
   try {
+    onStage?.('连接新文档编辑器')
     await chrome.debugger.attach(target, '1.3'); attached = true
     await chrome.debugger.sendCommand(target, 'Emulation.setFocusEmulationEnabled', { enabled: true })
     await chrome.tabs.update(tabId, { active: true })
@@ -111,6 +138,7 @@ export async function pasteAndVerifyFeishu(tabId: number, origin: string, token:
       if (attempt === 39) throw new Error('新文档页面加载超时')
       await sleep(500)
     }
+    onStage?.('读取新文档空白状态')
     const before = await readSaved(tabId, origin, token)
     const blank = verifyFeishuSaved(before, { html: '', text: '', codes: [], links: [], imageCount: 0 })
     if (!blank.ok) throw new Error('新文档已经出现正文或无法确认空白状态，停止粘贴以避免重复内容')
@@ -118,6 +146,7 @@ export async function pasteAndVerifyFeishu(tabId: number, origin: string, token:
       const entry = before.block_map[id]
       return (entry.data?.type ?? entry.type) === 'text'
     }) || ''
+    onStage?.('定位正文编辑器')
     let point: { x: number; y: number } | null = null
     for (let attempt = 0; attempt < 40; attempt++) {
       const [result] = await chrome.scripting.executeScript({ target, func: (expectedOrigin: string, expectedPath: string, blockId: string) => {
@@ -141,6 +170,7 @@ export async function pasteAndVerifyFeishu(tabId: number, origin: string, token:
       await sleep(500)
     }
     if (!point) throw new Error('没有找到飞书新文档正文编辑器，页面协议可能发生变化')
+    onStage?.('准备剪贴板')
     const [copyResult] = await chrome.scripting.executeScript({ target, func: async (expectedOrigin: string, expectedPath: string, html: string, text: string) => {
       if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航')
       const scope = globalThis as any
@@ -177,12 +207,14 @@ export async function pasteAndVerifyFeishu(tabId: number, origin: string, token:
     if (typeof copyResult?.result !== 'string') throw new Error('飞书剪贴板准备失败')
     const copied = prepareFeishuHtml(copyResult.result)
     if (copied.html !== content.html) throw new Error('剪贴板 HTML 回读与正文不一致，停止输入')
+    onStage?.('粘贴正文')
     for (const type of ['mousePressed', 'mouseReleased']) await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 })
     const [paste] = await chrome.scripting.executeScript({ target, func: (expectedOrigin: string, expectedPath: string) => {
       if (location.origin !== expectedOrigin || location.pathname !== expectedPath) throw new Error('新文档已导航，停止粘贴')
       return document.execCommand('paste')
     }, args: [origin, pathname] })
     if (!paste?.result) throw new Error('飞书原生粘贴没有执行')
+    onStage?.('验证服务端保存')
     let reason = '尚未保存'
     for (let attempt = 0; attempt < 20; attempt++) {
       await sleep(3000)

@@ -87,6 +87,14 @@ export function SyncDialog({
           </div>
         )}
 
+        {results.filter(result => result.platform === 'feishu' && !result.success).map(result => (
+          <div key={result.platform} role="alert" className="rounded-lg p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/30 space-y-2">
+            <p className="font-medium">飞书同步失败</p>
+            <p className="whitespace-pre-wrap break-words select-text">{result.error || '请查看同步历史中的失败详情'}</p>
+            {result.postUrl && <a href={result.postUrl} target="_blank" rel="noopener noreferrer" className="underline">查看已创建的文档</a>}
+          </div>
+        ))}
+
         {/* No article hint */}
         {!article && platforms.length > 0 && (
           <div className="text-xs text-muted-foreground text-center py-1">

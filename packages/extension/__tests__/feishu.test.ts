@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createdDocument, feishuOrigin, prepareFeishuHtml, verifyFeishuSaved } from '../src/lib/feishu/protocol'
-import { selectFeishuTab } from '../src/lib/feishu/browser'
+import { createFeishuDocument, pasteAndVerifyFeishu, selectFeishuTab } from '../src/lib/feishu/browser'
 import { FeishuAdapter } from '../src/adapters/feishu'
 
 const origin = 'https://test.feishu.cn'
@@ -19,7 +19,7 @@ beforeEach(() => {
   Object.assign(chrome, {
     permissions: { contains: vi.fn(async () => true) },
     cookies: { get: vi.fn(async () => ({ value: 'csrf-value' })), getAll: vi.fn(async () => [{ name: 'session', value: 'session-value' }]) },
-    scripting: { executeScript: vi.fn(async () => [{ result: created }]) },
+    scripting: { executeScript: vi.fn(async () => [{ result: { ok: true, value: created } }]) },
     debugger: { attach: vi.fn(async () => { throw new Error('浏览器正在被其他调试器使用') }), detach: vi.fn(async () => {}), sendCommand: vi.fn() },
   })
   vi.mocked(chrome.tabs.query).mockResolvedValue([{ id: 1, url: origin + '/drive/home/', active: true }] as chrome.tabs.Tab[])
@@ -59,6 +59,48 @@ describe('Feishu content and remote verification', () => {
     expect(() => prepareFeishuHtml('<img src="data:image/svg+xml;base64,PHN2Zz4=">')).toThrow('图片')
     expect(() => prepareFeishuHtml('<p>' + 'x'.repeat(6 * 1024 * 1024) + '</p>')).toThrow('5 MiB')
     expect(() => prepareFeishuHtml('<script>bad()</script>')).toThrow('正文')
+  })
+})
+
+describe('Feishu script injection boundary', () => {
+  it('never passes undefined through Chrome args when reading a saved document', async () => {
+    vi.mocked(chrome.debugger.attach).mockResolvedValue(undefined)
+    Object.assign(chrome.tabs, { update: vi.fn(async () => ({})), get: vi.fn(async () => ({ status: 'complete', url: `${origin}/docx/${token}` })) })
+    let readArgs: unknown[] | undefined
+    vi.mocked(chrome.scripting.executeScript).mockImplementation(async injection => {
+      if (String(injection.args?.[1]).includes('client_vars')) {
+        readArgs = injection.args
+        if (injection.args?.some(value => value === undefined)) throw new Error('Value is unserializable')
+        return [{ result: { ok: true, value: { code: 0, data: {} } }, frameId: 0 }]
+      }
+      return [{ result: true, frameId: 0 }]
+    })
+    await expect(pasteAndVerifyFeishu(2, origin, token, prepareFeishuHtml('<p>正文</p>'))).rejects.toThrow('没有正文块树')
+    expect(readArgs).toBeDefined()
+    expect(readArgs).not.toContain(undefined)
+    expect(chrome.debugger.detach).toHaveBeenCalledWith({ tabId: 2 })
+  })
+
+  it('preserves HTTP diagnostics returned by the page instead of losing the reason', async () => {
+    vi.mocked(chrome.scripting.executeScript).mockResolvedValue([{ frameId: 0, result: { ok: false, error: '飞书请求失败 HTTP 403', csrfRejected: false } }])
+    await expect(createFeishuDocument(1, origin, '测试')).rejects.toThrow('HTTP 403')
+  })
+
+  it('tries the second CSRF cookie only after an explicit CSRF rejection', async () => {
+    vi.mocked(chrome.cookies.get).mockImplementation(async ({ name }) => ({ value: name === '_csrf_token' ? 'stale' : 'valid' }) as chrome.cookies.Cookie)
+    vi.mocked(chrome.scripting.executeScript)
+      .mockResolvedValueOnce([{ frameId: 0, result: { ok: false, error: '飞书请求失败 HTTP 403（CSRF 校验失败）', csrfRejected: true } }])
+      .mockResolvedValueOnce([{ frameId: 0, result: { ok: true, value: created } }])
+    expect(await createFeishuDocument(1, origin, '测试')).toEqual({ token, url: `${origin}/docx/${token}` })
+    const calls = vi.mocked(chrome.scripting.executeScript).mock.calls
+    expect(calls[0][0].args?.[2]).toBe('stale')
+    expect(calls[1][0].args?.[2]).toBe('valid')
+  })
+
+  it('does not retry document creation after network errors', async () => {
+    vi.mocked(chrome.scripting.executeScript).mockResolvedValue([{ frameId: 0, result: { ok: false, error: 'Failed to fetch', csrfRejected: false } }])
+    await expect(createFeishuDocument(1, origin, '测试')).rejects.toThrow('Failed to fetch')
+    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(1)
   })
 })
 
