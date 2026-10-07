@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Globe, Loader2 } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { useCMSStore, type CMSType } from '../stores/cms'
@@ -13,6 +13,12 @@ interface CMSOption {
 }
 
 const cmsOptions: CMSOption[] = [
+  {
+    id: 'powernotes',
+    name: 'Power Notes · GitHub Pages',
+    description: 'Markdown、配图及目录索引同步为仓库草稿',
+    icon: '/assets/icon-48.png',
+  },
   {
     id: 'wordpress',
     name: 'WordPress',
@@ -43,6 +49,7 @@ interface ThirdPartyPlatform {
 
 export function AddCMSPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { addAccount } = useCMSStore()
   const [step, setStep] = useState<'select' | 'config'>('select')
   const [selectedCMS, setSelectedCMS] = useState<CMSType | null>(null)
@@ -51,6 +58,7 @@ export function AddCMSPage() {
     username: '',
     password: '',
     name: '',
+    category: 'tools',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -58,6 +66,17 @@ export function AddCMSPage() {
   // 第三方平台列表（从 adapter registry 动态获取）
   const [thirdPartyPlatforms, setThirdPartyPlatforms] = useState<ThirdPartyPlatform[]>([])
   const [platformsLoading, setPlatformsLoading] = useState(true)
+
+  useEffect(() => {
+    const accountId = searchParams.get('account')
+    if (!accountId) return
+    chrome.storage.local.get('cmsAccounts').then(({ cmsAccounts = [] }) => {
+      const account = cmsAccounts.find((item: any) => item.id === accountId && item.type === 'powernotes')
+      if (!account) return
+      setSelectedCMS('powernotes'); setStep('config')
+      setConfig({ name: account.name, url: account.url, username: account.username, category: account.category || 'tools', password: '' })
+    }).catch(() => setError('读取博客配置失败'))
+  }, [searchParams])
 
   // 加载平台列表和追踪页面访问
   useEffect(() => {
@@ -100,6 +119,7 @@ export function AddCMSPage() {
         url: config.url,
         username: config.username,
         password: config.password,
+        ...(selectedCMS === 'powernotes' ? { category: config.category } : {}),
       })
 
       if (result.success) {
@@ -242,19 +262,19 @@ export function AddCMSPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">用户名</label>
+              <label className="block text-sm font-medium mb-1">{selectedCMS === 'powernotes' ? 'GitHub 仓库' : '用户名'}</label>
               <input
                 type="text"
                 value={config.username}
                 onChange={e => setConfig({ ...config, username: e.target.value })}
-                placeholder="admin"
+                placeholder={selectedCMS === 'powernotes' ? 'shuai-yemao/power-notes' : 'admin'}
                 className="w-full px-3 py-2 rounded-md border bg-background text-sm"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">密码</label>
+              <label className="block text-sm font-medium mb-1">{selectedCMS === 'powernotes' ? 'GitHub Token' : '密码'}</label>
               <input
                 type="password"
                 value={config.password}
@@ -264,9 +284,17 @@ export function AddCMSPage() {
                 required
               />
               <p className="text-xs text-muted-foreground mt-1">
-                密码仅存储在本地，不会上传到任何服务器
+                {selectedCMS === 'powernotes' ? 'Token 存储在本机，仅发给 GitHub API。建议仅授权此仓库的 Contents 读写权限。' : '凭据存储在本机，仅用于连接指定站点。'}
               </p>
             </div>
+
+            {selectedCMS === 'powernotes' && <div>
+              <label className="block text-sm font-medium mb-1">笔记分类</label>
+              <select value={config.category} onChange={e => setConfig({ ...config, category: e.target.value })} className="w-full px-3 py-2 rounded-md border bg-background text-sm">
+                <option value="embedded">嵌入式</option><option value="software">软件工程</option><option value="tools">工具与方法</option><option value="thinking">思考与随笔</option>
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">保存独立草稿分支并返回比较链接，审查并合并后网站才发布。请使用 Markdown 正文；本地图片需同时导入。</p>
+            </div>}
 
             {error && (
               <div className="text-sm text-red-500 bg-red-50 p-2 rounded">
@@ -275,7 +303,7 @@ export function AddCMSPage() {
             )}
 
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? '连接中...' : '添加站点'}
+              {loading ? '连接中...' : searchParams.get('account') ? '验证并更新站点' : '添加站点'}
             </Button>
           </form>
         </>

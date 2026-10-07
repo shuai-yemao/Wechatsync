@@ -12,6 +12,7 @@ import {
 } from '../adapters'
 import * as wordpressAdapter from '../adapters/cms/wordpress'
 import * as metaweblogAdapter from '../adapters/cms/metaweblog'
+import * as powernotesAdapter from '../adapters/cms/powernotes'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('SyncService')
@@ -374,10 +375,13 @@ export async function performSync(
 
       onDetailProgress?.({ platform: accountId, platformName: account.name, stage: 'saving' })
 
-      const credentials = { url: account.url, username: account.username, password }
+      const credentials = { url: account.url, username: account.username, password, category: account.category }
       let result
 
       switch (account.type) {
+        case 'powernotes':
+          result = await powernotesAdapter.publish(credentials, normalizedArticle)
+          break
         case 'wordpress':
           result = await wordpressAdapter.publish(credentials, normalizedArticle, { draftOnly: true })
           break

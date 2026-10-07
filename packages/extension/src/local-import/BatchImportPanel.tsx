@@ -69,7 +69,7 @@ export function BatchImportPanel(props: {
         <button className="rounded-lg bg-primary text-primary-foreground px-4 py-2 disabled:opacity-50" disabled={props.locked || !eligible} onClick={props.onStart}>批量同步 {eligible} 份文档</button>
         {props.running && <button className="border rounded-lg px-3 py-2 disabled:opacity-50" disabled={props.stopRequested} onClick={props.onStop}>{props.stopRequested ? '将在当前项完成后停止' : '完成当前项后停止'}</button>}
       </div>
-      <p className="text-xs text-muted-foreground">每份文档单独上传，依次处理以保护剪贴板。已成功平台不会重复上传；结果待确认或飞书已创建后失败的项目，请先检查历史或文档。关闭此页会停止启动后续项，当前后台任务仍会继续。</p>
+      <p className="text-xs text-muted-foreground">每份文档单独上传，依次处理以保护剪贴板。已成功平台不会重复上传；结果待确认或目标已创建后失败的项目，请先检查历史或文档。关闭此页会停止启动后续项，当前后台任务仍会继续。</p>
     </>}
     {props.previousItems.length > 0 && <details>
       <summary className="text-sm cursor-pointer">上次批量结果（{props.previousItems.length} 份）</summary>

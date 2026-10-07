@@ -63,6 +63,10 @@ wechatsync extract -o article.md  # save to file
 
 ## Platform IDs
 
+For this browser extension fork, Feishu is `feishu`. Registered self-hosted blogs use the exact `cms_*` account ID returned by `wechatsync platforms` or MCP `list_platforms`; do not use `powernotes` as a platform ID. Power Notes supports Markdown and creates a new GitHub draft branch with a comparison URL. It does not merge or publish the website. Local images must be included as base64 data URIs before an MCP call, or selected with the Markdown in the extension local-import page. Check `check_auth` for the specific account before synchronizing. A failed result containing a draft URL must be inspected before retrying.
+
+On Windows with the local Codex setup launcher, the CLI shim loads the local bridge token automatically. Do not print that token or put it into article content. Do not silently install a second extension or replace the existing fork.
+
 zhihu, juejin, csdn, jianshu, toutiao, douyin, weibo, bilibili, xiaohongshu, baijiahao, weixin, yuque, douban, sohu, xueqiu, woshipm, dayu, yidian, 51cto, sohufocus, imooc, oschina, segmentfault, cnblogs, x, eastmoney, smzdm, netease, wordpress, typecho
 
 ## Notes

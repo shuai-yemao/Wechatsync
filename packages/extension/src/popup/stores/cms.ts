@@ -3,7 +3,7 @@ import { createLogger } from '../../lib/logger'
 
 const logger = createLogger('CMSStore')
 
-export type CMSType = 'wordpress' | 'typecho' | 'metaweblog'
+export type CMSType = 'wordpress' | 'typecho' | 'metaweblog' | 'powernotes'
 
 export interface CMSAccount {
   id: string
@@ -11,6 +11,7 @@ export interface CMSAccount {
   name: string
   url: string
   username: string
+  category?: string
   // 密码存储在 chrome.storage.local 中，不在状态里
   isConnected: boolean
   lastError?: string
@@ -47,7 +48,8 @@ export const useCMSStore = create<CMSState>((set) => ({
       // 直接从 storage 读取，避免 Zustand state 未加载导致覆盖
       const storage = await chrome.storage.local.get('cmsAccounts')
       const accounts: CMSAccount[] = storage.cmsAccounts || []
-      const id = `cms_${Date.now()}`
+      const previous = accountData.type === 'powernotes' ? accounts.find(account => account.type === 'powernotes' && account.username === accountData.username) : undefined
+      const id = previous?.id || `cms_${Date.now()}`
 
       const newAccount: CMSAccount = {
         id,
@@ -55,6 +57,7 @@ export const useCMSStore = create<CMSState>((set) => ({
         name: accountData.name,
         url: accountData.url,
         username: accountData.username,
+        ...(accountData.category ? { category: accountData.category } : {}),
         isConnected: false,
       }
 
@@ -66,6 +69,7 @@ export const useCMSStore = create<CMSState>((set) => ({
           url: accountData.url,
           username: accountData.username,
           password: accountData.password,
+          category: accountData.category,
         },
       })
 
@@ -76,10 +80,10 @@ export const useCMSStore = create<CMSState>((set) => ({
       newAccount.isConnected = true
 
       // 保存账户信息
-      const updatedAccounts = [...accounts, newAccount]
+      const updatedAccounts = previous ? accounts.map(account => account.id === id ? newAccount : account) : [...accounts, newAccount]
       await chrome.storage.local.set({ cmsAccounts: updatedAccounts })
 
-      // 单独保存密码 (加密存储)
+      // 单独保存凭据；chrome.storage.local 本身不提供加密。
       await chrome.storage.local.set({ [`cms_pwd_${id}`]: accountData.password })
 
       set({ accounts: updatedAccounts })
@@ -122,6 +126,7 @@ export const useCMSStore = create<CMSState>((set) => ({
           url: account.url,
           username: account.username,
           password,
+          category: account.category,
         },
       })
 

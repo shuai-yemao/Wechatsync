@@ -11,6 +11,7 @@ import {
 } from '../adapters'
 import * as wordpressAdapter from '../adapters/cms/wordpress'
 import * as metaweblogAdapter from '../adapters/cms/metaweblog'
+import * as powernotesAdapter from '../adapters/cms/powernotes'
 import { startMcpClient, stopMcpClient, getMcpStatus, mcpClient } from '../mcp/client'
 import { createLogger } from '../lib/logger'
 import {
@@ -36,7 +37,7 @@ import { preprocessViaTemporaryTab } from './sync-service'
 const logger = createLogger('Background')
 
 // CMS 类型
-type CMSType = 'wordpress' | 'typecho' | 'metaweblog'
+type CMSType = 'wordpress' | 'typecho' | 'metaweblog' | 'powernotes'
 
 // 同步状态类型
 interface ActiveSyncState {
@@ -133,7 +134,7 @@ type MessageAction =
   | { type: 'CHECK_AUTH'; payload: { platformId: string } }
   | { type: 'SYNC_ARTICLE'; payload: { article: any; platforms: string[]; allSelectedPlatforms?: string[]; skipHistory?: boolean; source?: string; syncId?: string } }
   | { type: 'OPEN_SYNC_PAGE'; path?: string }
-  | { type: 'TEST_CMS_CONNECTION'; payload: { type: CMSType; url: string; username: string; password: string } }
+  | { type: 'TEST_CMS_CONNECTION'; payload: { type: CMSType; url: string; username: string; password: string; category?: string } }
   | { type: 'SYNC_TO_CMS'; payload: { accountId: string; article: any } }
   | { type: 'MCP_ENABLE' }
   | { type: 'MCP_DISABLE' }
@@ -165,6 +166,14 @@ chrome.runtime.onMessage.addListener((message: MessageAction, sender, sendRespon
 })
 
 async function handleMessage(message: MessageAction, sender?: chrome.runtime.MessageSender) {
+  if (message.type === 'TEST_CMS_CONNECTION' && message.payload.type === 'powernotes' && !isTrustedExtensionPage(sender)) throw new Error('博客配置只能从插件页面操作')
+  const targets = message.type === 'SYNC_TO_CMS' ? [message.payload.accountId]
+    : message.type === 'SYNC_ARTICLE' ? message.payload?.platforms
+      : message.type === 'START_SYNC_FROM_EDITOR' ? message.platforms : undefined
+  if (targets?.length && !isTrustedExtensionPage(sender)) {
+    const { cmsAccounts = [] } = await chrome.storage.local.get('cmsAccounts')
+    if (cmsAccounts.some((account: any) => account.type === 'powernotes' && targets.includes(account.id))) throw new Error('博客同步只能从插件页面或已验证的 MCP 发起')
+  }
   if (message.type === 'ONENOTE_READ' || message.type === 'ONENOTE_DISCONNECT' ||
     (message.type === 'SYNC_ARTICLE' && (message.payload?.source === 'local' || message.payload?.platforms?.includes('feishu'))) ||
     (message.type === 'START_SYNC_FROM_EDITOR' && message.platforms?.includes('feishu'))) {
@@ -513,12 +522,15 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
     }
 
     case 'TEST_CMS_CONNECTION': {
-      const { type, url, username, password } = message.payload
-      const credentials = { url, username, password }
+      const { type, url, username, password, category } = message.payload
+      const credentials = { url, username, password, category }
 
       try {
         let result
         switch (type) {
+          case 'powernotes':
+            result = await powernotesAdapter.testConnection(credentials)
+            break
           case 'wordpress':
             result = await wordpressAdapter.testConnection(credentials)
             break
@@ -562,10 +574,14 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
           url: account.url,
           username: account.username,
           password,
+          category: account.category,
         }
 
         let result
         switch (account.type) {
+          case 'powernotes':
+            result = await powernotesAdapter.publish(credentials, article)
+            break
           case 'wordpress':
             result = await wordpressAdapter.publish(credentials, article, { draftOnly: true })
             break
@@ -862,9 +878,12 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
             platform: accountId, platformName: account.name, stage: 'saving',
           })
 
-          const credentials = { url: account.url, username: account.username, password }
+          const credentials = { url: account.url, username: account.username, password, category: account.category }
           let result
           switch (account.type) {
+            case 'powernotes':
+              result = await powernotesAdapter.publish(credentials, article)
+              break
             case 'wordpress':
               result = await wordpressAdapter.publish(credentials, article, { draftOnly: true })
               break

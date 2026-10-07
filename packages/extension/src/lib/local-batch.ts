@@ -72,7 +72,7 @@ export interface BatchItem {
 
 export function canRunBatchItem(item: BatchItem, targets: string[]): boolean {
   if (!item.selected || item.status === 'syncing' || item.status === 'unknown') return false
-  if (targets.includes('feishu') && item.results.some(result => result.platform === 'feishu' && !result.success && result.postUrl)) return false
+  if (item.results.some(result => targets.includes(result.platform) && !result.success && result.postUrl)) return false
   return targets.some(target => !item.results.some(result => result.platform === target && result.success))
 }
 

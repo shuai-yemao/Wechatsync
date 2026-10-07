@@ -66,7 +66,12 @@ export class ExtensionBridge {
   private startServer(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.wss = new WebSocketServer({ port: this.port })
+        this.wss = new WebSocketServer({ port: this.port, host: process.env.SYNC_BIND_HOST || '127.0.0.1',
+          verifyClient: ({ origin }: { origin: string }) => {
+            const expected = process.env.WECHATSYNC_EXTENSION_ID
+            return expected ? origin === `chrome-extension://${expected}` : /^chrome-extension:\/\/[a-p]{32}$/.test(origin || '')
+          },
+        })
 
         this.wss.on('listening', () => {
           if (!this.silent) console.error(`[Bridge] WebSocket server listening on port ${this.port}`)
@@ -92,7 +97,7 @@ export class ExtensionBridge {
 
           ws.on('close', () => {
             if (!this.silent) console.error('[Bridge] Extension disconnected')
-            this.client = null
+            if (this.client === ws) this.client = null
           })
 
           ws.on('error', (error: Error) => {
@@ -115,14 +120,10 @@ export class ExtensionBridge {
   private startHttpApi(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.httpServer = http.createServer(async (req, res) => {
-        // CORS headers
-        res.setHeader('Access-Control-Allow-Origin', '*')
-        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-
-        if (req.method === 'OPTIONS') {
-          res.writeHead(200)
-          res.end()
+        // Native local MCP/CLI clients only; websites cannot forward requests.
+        if (req.headers.origin || req.method === 'OPTIONS') {
+          res.writeHead(403)
+          res.end('Browser HTTP origins are not allowed')
           return
         }
 
@@ -136,6 +137,11 @@ export class ExtensionBridge {
         }
 
         if (req.method === 'POST' && req.url === '/request') {
+          if (!this.token || req.headers.authorization !== `Bearer ${this.token}`) {
+            res.writeHead(401, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'Invalid or missing bridge token' }))
+            return
+          }
           let body = ''
           req.on('data', chunk => body += chunk)
           req.on('end', async () => {
@@ -157,7 +163,7 @@ export class ExtensionBridge {
       })
 
       const httpPort = this.port + 1
-      this.httpServer.listen(httpPort, () => {
+      this.httpServer.listen(httpPort, process.env.SYNC_BIND_HOST || '127.0.0.1', () => {
         if (!this.silent) console.error(`[Bridge] HTTP API listening on port ${httpPort}`)
         resolve()
       })
@@ -299,7 +305,7 @@ export class ExtensionBridge {
   private async checkPrimaryHealth(): Promise<{ connected: boolean; error?: string }> {
     return new Promise((resolve) => {
       const options = {
-        hostname: 'localhost',
+        hostname: '127.0.0.1',
         port: this.port + 1,
         path: '/status',
         method: 'GET',
@@ -455,6 +461,7 @@ export class ExtensionBridge {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.token}`,
           'Content-Length': Buffer.byteLength(data)
         }
       }

@@ -74,6 +74,9 @@ describe('serial document queue', () => {
   it('never recreates a failed Feishu document with an existing URL', () => {
     expect(canRunBatchItem({ ...item('one'), status: 'failed', results: [{ ...result('feishu', false), postUrl: 'https://tenant.feishu.cn/docx/test' }] }, ['feishu'])).toBe(false)
   })
+  it('never retries a possibly created Power Notes draft branch', () => {
+    expect(canRunBatchItem({ ...item('one'), status: 'failed', results: [{ ...result('cms_powernotes', false), postUrl: 'https://github.com/user/repo/compare/main...draft' }] }, ['cms_powernotes'])).toBe(false)
+  })
   it('stops after completing the current document', async () => {
     let stop = false
     const updates: BatchItem[] = []

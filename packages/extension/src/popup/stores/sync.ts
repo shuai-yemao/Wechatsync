@@ -55,7 +55,7 @@ interface Platform {
   // 区分平台类型：dsl 为 DSL 定义的平台，cms 为自建站点
   sourceType: 'dsl' | 'cms'
   // CMS 类型（仅 cms 类型有效）
-  cmsType?: 'wordpress' | 'typecho' | 'metaweblog'
+  cmsType?: 'wordpress' | 'typecho' | 'metaweblog' | 'powernotes'
 }
 
 interface Article {

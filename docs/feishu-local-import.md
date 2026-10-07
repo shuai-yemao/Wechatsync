@@ -1,10 +1,10 @@
 # 飞书与本地导入预览版
 
-本分支在 Wechatsync v2 的浏览器扩展上增加本地 Markdown/HTML 导入、飞书在线文档适配器和 OneNote 来源读取。整个操作链路在浏览器扩展内完成，不需要本机 CLI 或连接组件。
+本分支在 Wechatsync v2 的浏览器扩展上增加本地 Markdown/HTML 导入、飞书在线文档适配器和 OneNote 来源读取。这些导入与飞书同步操作在浏览器扩展内完成，不需要本机 CLI 或连接组件。另可启用本机 MCP 桥接，让 AI 使用插件中已配置的平台；该可选入口需要本机 MCP 服务。
 
 ## 安装与本地文档
 
-当前构建版本为 `2.0.9-feishu-local-preview.6`，包含多文档队列和本地路径添加，详见 [批量导入说明](batch-local-import-preview5.md)。本版修复新文档等待方式和剪贴板快照回读，并补充具体失败原因；详见 [preview.6 修复报告](feishu-batch-fix-preview6.md)。沿用 preview.4 的飞书租户识别与保存验证。更新同一已加载目录后重新加载扩展，并重新打开导入页。
+当前构建版本为 `2.0.9-feishu-local-preview.7`，增加 Power Notes 博客注册和本机 AI 连接，详见 [Power Notes 与 MCP 说明](power-notes-mcp-preview7.md)。继续保留多文档队列和本地路径添加，详见 [批量导入说明](batch-local-import-preview5.md)，以及 preview.6 的新文档等待与剪贴板快照回读修复，详见 [preview.6 修复报告](feishu-batch-fix-preview6.md)。沿用 preview.4 的飞书租户识别与保存验证。更新同一已加载目录后重新加载扩展，并重新打开导入页。
 
 1. 将构建扩展 zip 解压到固定目录。
 2. 在 Chrome/Edge 的扩展管理页开启开发者模式，点击“加载已解压的扩展程序”，选择直接包含 manifest.json 的目录。

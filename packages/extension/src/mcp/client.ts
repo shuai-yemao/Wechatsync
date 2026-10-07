@@ -313,12 +313,23 @@ class McpClient {
     switch (method) {
       case 'listPlatforms': {
         const forceRefresh = (params?.forceRefresh as boolean) ?? false
-        return await checkAllPlatformsAuth(forceRefresh)
+        const platforms = await checkAllPlatformsAuth(forceRefresh)
+        const { cmsAccounts = [] } = await chrome.storage.local.get('cmsAccounts')
+        return [...platforms, ...cmsAccounts.map((account: any) => ({ id: account.id, name: account.name, homepage: account.url, username: account.username, isAuthenticated: account.isConnected, sourceType: 'cms', cmsType: account.type }))]
       }
 
       case 'checkAuth': {
         const platform = params?.platform as string
         if (!platform) throw new Error('Missing platform parameter')
+        const { cmsAccounts = [] } = await chrome.storage.local.get('cmsAccounts')
+        const account = cmsAccounts.find((entry: any) => entry.id === platform)
+        if (account?.type === 'powernotes') {
+          const secret = await chrome.storage.local.get(`cms_pwd_${account.id}`)
+          const { testConnection } = await import('../adapters/cms/powernotes')
+          const result = await testConnection({ url: account.url, username: account.username, password: secret[`cms_pwd_${account.id}`] || '', category: account.category })
+          return { isAuthenticated: result.success, username: account.username, error: result.error }
+        }
+        if (account) return { isAuthenticated: account.isConnected, username: account.username, error: account.lastError }
         return await checkPlatformAuth(platform)
       }
 

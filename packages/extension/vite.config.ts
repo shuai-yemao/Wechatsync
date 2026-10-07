@@ -2,11 +2,17 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { crx } from '@crxjs/vite-plugin'
 import yaml from '@modyfi/vite-plugin-yaml'
-import { resolve } from 'path'
+import { resolve, dirname } from 'path'
+import { createRequire } from 'module'
 import { copyFileSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import baseManifest from './manifest.json'
 
 const manifest = baseManifest
+const parserRequire = createRequire(resolve(__dirname, 'vite.config.ts'))
+// The browser export creates an element at module load. The parser is now also
+// used by the MV3 worker, so use the package's DOM-free entity-table export.
+const parserRoot = dirname(parserRequire.resolve('remark-parse'))
+const workerCharacterDecoder = parserRequire.resolve('decode-named-character-reference', { paths: [parserRoot] })
 
 // 复制静态文件并修改 manifest 的插件
 function copyStaticFilesPlugin() {
@@ -96,6 +102,7 @@ export default defineConfig(({ mode }) => {
     alias: {
       '@': resolve(__dirname, 'src'),
       '@wechatsync/core': resolve(__dirname, '../core/src'),
+      'decode-named-character-reference': workerCharacterDecoder,
     },
   },
   build: {

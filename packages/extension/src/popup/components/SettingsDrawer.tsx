@@ -20,6 +20,7 @@ interface CMSAccount {
   name: string
   type: string
   url: string
+  isConnected?: boolean
 }
 
 export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
@@ -289,6 +290,9 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{account.name}</p>
                       <p className="text-xs text-muted-foreground truncate">{account.url}</p>
+                      {account.type === 'powernotes' && <button className="text-xs text-primary hover:underline" onClick={() => { onClose(); window.location.hash = `/add-cms?account=${encodeURIComponent(account.id)}` }}>
+                        {account.isConnected ? '更新博客 Token / 分类' : '配置 GitHub Token'}
+                      </button>}
                     </div>
                     <button
                       onClick={() => deleteCmsAccount(account.id)}
